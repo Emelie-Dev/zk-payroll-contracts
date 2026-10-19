@@ -1344,7 +1344,7 @@ pub enum DataKey {
     ReviewerCount,
     /// The admin-registered ed25519 public key that signs off-chain,
     /// expiring operator authorizations (#519). Absent means no operator
-    /// key is registered and `signed_add_reviewer` is unusable.
+    /// key is registered and signed operator actions are unusable.
     OperatorKey,
     /// Marks a signed operator authorization payload (keyed by its
     /// SHA-256'd XDR encoding) as already consumed, preventing replay of
@@ -6870,20 +6870,24 @@ impl Payroll {
             panic!("Unauthorized");
         }
         admin.require_auth();
-        Self::require_no_active_payroll_run(&e);
-        let previous_ref = stored_ref(&e, &DataKey::CompanyState);
+        Self::set_company_state_internal(&e, &admin, state);
+    }
+
+    fn set_company_state_internal(e: &Env, admin: &Address, state: CompanyState) {
+        Self::require_no_active_payroll_run(e);
+        let previous_ref = stored_ref(e, &DataKey::CompanyState);
         e.storage().persistent().set(&DataKey::CompanyState, &state);
         e.events().publish(
-            (symbol_short!("payroll"), Symbol::new(&e, "state_changed")),
+            (symbol_short!("payroll"), Symbol::new(e, "state_changed")),
             state,
         );
         record_config_change(
-            &e,
-            &admin,
+            e,
+            admin,
             config_keys::COMPANY_STATE,
-            no_value_ref(&e),
+            no_value_ref(e),
             previous_ref,
-            stored_ref(&e, &DataKey::CompanyState),
+            stored_ref(e, &DataKey::CompanyState),
         );
     }
 
@@ -8622,8 +8626,8 @@ impl Payroll {
     }
 
     /// Revoke the currently registered operator key. Only the admin may
-    /// call. After revocation, `signed_add_reviewer` is unusable until a new
-    /// key is registered.
+    /// call. After revocation, signed operator actions are unusable until a
+    /// new key is registered.
     pub fn revoke_operator_key(e: Env, admin: Address) {
         let addrs: ContractAddresses = e
             .storage()
@@ -8691,23 +8695,10 @@ impl Payroll {
                     panic!("Signed payload action does not match the supplied reviewer");
                 }
             }
+            _ => panic!("Signed payload action is not AddReviewer"),
         }
 
-        let operator_key: BytesN<32> = e
-            .storage()
-            .persistent()
-            .get(&DataKey::OperatorKey)
-            .expect("No operator key registered");
-
-        let message = require_not_expired(&e, &payload);
-        e.crypto()
-            .ed25519_verify(&operator_key, &message, &signature);
-
-        let consume_key = DataKey::ConsumedOperatorAuth(consumed_key(&e, &payload));
-        if e.storage().persistent().has(&consume_key) {
-            panic!("Signed operator authorization already consumed");
-        }
-        e.storage().persistent().set(&consume_key, &true);
+        Self::verify_and_consume_operator_authorization(&e, &payload, &signature);
 
         let addrs: ContractAddresses = e
             .storage()
@@ -8715,6 +8706,59 @@ impl Payroll {
             .get(&DataKey::Addresses)
             .expect("Not initialized");
         Self::grant_reviewer_internal(&e, &addrs.admin, &reviewer);
+    }
+
+    /// Set the company lifecycle state using an expiring, signed operator
+    /// authorization. The signed action must bind the exact requested state.
+    /// This is an additive alternative to `set_company_state`; that
+    /// admin-authenticated entrypoint remains unchanged. Missing operator
+    /// keys, mismatched actions, invalid signatures, expired authorizations,
+    /// and replays are rejected.
+    pub fn signed_set_company_state(
+        e: Env,
+        state: CompanyState,
+        payload: SignedOperatorPayload,
+        signature: BytesN<64>,
+    ) {
+        match &payload.action {
+            SignedOperatorAction::SetCompanyState(authorized_state) => {
+                if authorized_state != &state {
+                    panic!("Signed payload action does not match the supplied company state");
+                }
+            }
+            _ => panic!("Signed payload action is not SetCompanyState"),
+        }
+
+        Self::verify_and_consume_operator_authorization(&e, &payload, &signature);
+
+        let addrs: ContractAddresses = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Addresses)
+            .expect("Not initialized");
+        Self::set_company_state_internal(&e, &addrs.admin, state);
+    }
+
+    fn verify_and_consume_operator_authorization(
+        e: &Env,
+        payload: &SignedOperatorPayload,
+        signature: &BytesN<64>,
+    ) {
+        let operator_key: BytesN<32> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::OperatorKey)
+            .expect("No operator key registered");
+
+        let message = require_not_expired(e, payload);
+        e.crypto()
+            .ed25519_verify(&operator_key, &message, signature);
+
+        let consume_key = DataKey::ConsumedOperatorAuth(consumed_key(e, payload));
+        if e.storage().persistent().has(&consume_key) {
+            panic!("Signed operator authorization already consumed");
+        }
+        e.storage().persistent().set(&consume_key, &true);
     }
 
     /// Approve a payroll run as an authorized reviewer.
