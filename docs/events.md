@@ -410,6 +410,28 @@ These events cover payroll periods, individual payment execution, and the
 proof-verified settlement step. Reconciliation tools, payment dashboards,
 and indexers MUST subscribe to this domain.
 
+### `payroll / review_resolution_audit` ? overpayment review
+
+Emitted whenever an overpayment review is resolved. This additive audit event
+preserves the legacy `payroll / review_resolved` event while making the
+resolving administrator, mandatory reason, and resolution timestamp
+available to indexers. It contains no salary amounts, employee addresses, or
+proof data.
+
+```
+topics[0]  Symbol("payroll")
+topics[1]  Symbol("review_resolution_audit")
+data       (u64 review_id, u64 run_id, Address resolved_by,
+            Symbol resolution_reason, u64 resolved_at)
+```
+
+`review_id` and `run_id` correlate the event with the stored review and
+payroll run. `resolved_at` is the ledger timestamp used in the review record.
+
+| Severity | Consumers |
+|----------|-----------|
+| `MEDIUM` (exception disposition) | Audit dashboards, reconciliation tools, compliance indexers |
+
 ### `PeriodCreated` ? `payment_executor`
 
 Emitted when a new payroll period is opened for a company. Periods are

@@ -1451,6 +1451,22 @@ pub fn emit_dispute_resolved(
     );
 }
 
+/// Emitted when an overpayment review is resolved, with the actor, reason,
+/// and timestamp required for an actionable audit trail.
+pub fn emit_review_resolution_audit(
+    e: &Env,
+    review_id: u64,
+    run_id: u64,
+    resolved_by: Address,
+    resolution_reason: Symbol,
+    resolved_at: u64,
+) {
+    e.events().publish(
+        (payroll_topic(), Symbol::new(e, "review_resolution_audit")),
+        (review_id, run_id, resolved_by, resolution_reason, resolved_at),
+    );
+}
+
 // ── Issue #490: payroll configuration audit events ──────────────────────────
 
 /// Emitted by the Payroll contract once per successful configuration change
